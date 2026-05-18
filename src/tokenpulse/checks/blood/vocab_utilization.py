@@ -10,11 +10,45 @@ Adapted from tokenizer-analysis-suite (TokEval) reference implementation.
 from typing import List, Optional, Dict, Any, Set
 from collections import Counter
 import time
+import json
+from pathlib import Path
 
 import numpy as np
 
 from tokenpulse.checks.base_check import BaseCheck
 from tokenpulse.checks.check_result import CheckResult, CheckConfig, HealthStatus
+
+
+def _load_default_dataset(lang: str = "en", max_samples: int = 100) -> List[str]:
+    """
+    Load default dataset from project data directory.
+
+    Args:
+        lang: Language code ("en" or "zh")
+        max_samples: Maximum number of samples to load
+
+    Returns:
+        List of text samples
+    """
+    # Try to find data directory relative to this module
+    module_dir = Path(__file__).parent
+    project_root = module_dir.parent.parent.parent  # src/tokenpulse/checks/blood -> project root
+    data_dir = project_root / "data"
+
+    jsonl_file = data_dir / f"paracrawl_{lang}_1000.jsonl"
+
+    if not jsonl_file.exists():
+        return []
+
+    texts = []
+    with open(jsonl_file, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f):
+            if i >= max_samples:
+                break
+            record = json.loads(line)
+            texts.append(record['text'])
+
+    return texts
 
 
 class VocabularyUtilizationCheck(BaseCheck):
@@ -369,8 +403,25 @@ class VocabularyUtilizationCheck(BaseCheck):
 
         return score
 
-    def _get_default_prompts(self) -> List[str]:
-        """Get default prompts for vocabulary analysis."""
+    def _get_default_prompts(self, lang: str = "en") -> List[str]:
+        """
+        Get default prompts for vocabulary analysis.
+
+        Loads from project data directory (data/paracrawl_*.jsonl).
+        Falls back to hardcoded prompts if data files not found.
+
+        Args:
+            lang: Language code ("en" or "zh")
+
+        Returns:
+            List of text samples
+        """
+        # Try loading from project data
+        texts = _load_default_dataset(lang, max_samples=self.config.sample_size)
+        if texts:
+            return texts
+
+        # Fallback to hardcoded prompts
         return [
             "The quick brown fox jumps over the lazy dog.",
             "Machine learning is a subset of artificial intelligence.",
