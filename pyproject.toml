@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tokenpulse"
+version = "0.1.0"
+description = "LLM Model Diagnostic Tool - Health Check for Large Language Models"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "TokenPulse Team"}
+]
+keywords = ["llm", "diagnostic", "model-analysis", "machine-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+transformerlens = [
+    "transformer-lens>=1.0",
+    "transformers>=4.35",
+]
+vllm = [
+    "vllm>=0.3",
+]
+api = [
+    "openai>=1.0",
+    "anthropic>=0.8",
+]
+viz = [
+    "matplotlib>=3.8",
+]
+cache = [
+    "zarr>=2.16",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+all = [
+    "tokenpulse[transformerlens,vllm,api,viz,cache,dev]",
+]
+
+[project.scripts]
+tokenpulse = "tokenpulse.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/tokenpulse"
+Documentation = "https://github.com/your-org/tokenpulse#readme"
+Repository = "https://github.com/your-org/tokenpulse"
+Issues = "https://github.com/your-org/tokenpulse/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src/tokenpulse"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
