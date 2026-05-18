@@ -1,15 +1,32 @@
 """
 Diagnostic check modules (L4 Layer).
 
-This package will contain various diagnostic checks:
-- blood: Probability distribution checks
+This package contains various diagnostic checks organized by category:
+- blood: Probability distribution checks (vocabulary utilization, entropy)
 - neural: Sensitivity and robustness checks
 - bone: Representation and weight checks
 - immune: Calibration and confidence checks
 """
 
-# P1 phase checks will be added here
-# from tokenpulse.checks.blood.vocab_utilization import VocabularyUtilizationCheck
-# from tokenpulse.checks.immune.confidence_calibration import ConfidenceCalibrationCheck
+from tokenpulse.checks.check_result import (
+    CheckResult,
+    CheckConfig,
+    HealthStatus,
+)
+from tokenpulse.checks.base_check import BaseCheck
+from tokenpulse.checks.blood.vocab_utilization import VocabularyUtilizationCheck
+from tokenpulse.checks.blood.token_stability import TokenStabilityCheck
+from tokenpulse.checks.immune.calibration_check import CalibrationCheck
 
-__all__ = []
+__all__ = [
+    # Base classes
+    "BaseCheck",
+    "CheckConfig",
+    "CheckResult",
+    "HealthStatus",
+    # Blood checks
+    "VocabularyUtilizationCheck",
+    "TokenStabilityCheck",
+    # Immune checks
+    "CalibrationCheck",
+]
