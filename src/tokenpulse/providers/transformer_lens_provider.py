@@ -30,6 +30,11 @@ class TransformerLensProvider(BaseProvider):
         self,
         model_id: str,
         device: Optional[str] = None,
+        dtype: Union[str, torch.dtype] = "float32",
+        fold_ln: bool = True,
+        center_writing_weights: bool = True,
+        center_unembed: bool = True,
+        refactor_factored_attn_matrices: bool = False,
         **kwargs
     ):
         """
@@ -38,9 +43,19 @@ class TransformerLensProvider(BaseProvider):
         Args:
             model_id: Model name (e.g., "gpt2-small", "pythia-70m")
             device: Device to run on ("cuda", "cpu", or None for auto)
+            dtype: Data type for model weights ("float32", "float16", "bfloat16", or torch.dtype)
+            fold_ln: Whether to fold LayerNorm into subsequent layers (improves interpretability)
+            center_writing_weights: Whether to center writing weights (improves interpretability)
+            center_unembed: Whether to center unembed matrix (improves interpretability)
+            refactor_factored_attn_matrices: Whether to refactor factored attention matrices
             **kwargs: Additional arguments passed to HookedTransformer.from_pretrained()
         """
         super().__init__(model_id, **kwargs)
+
+        # Store interpretability settings for reference
+        self._fold_ln = fold_ln
+        self._center_writing_weights = center_writing_weights
+        self._center_unembed = center_unembed
 
         # Lazy import to avoid dependency issues
         try:
@@ -56,10 +71,28 @@ class TransformerLensProvider(BaseProvider):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
 
-        # Load model - from_pretrained handles device placement via device parameter
+        # Convert dtype string to torch dtype if needed
+        if isinstance(dtype, str):
+            dtype_map = {
+                "float32": torch.float32,
+                "float16": torch.float16,
+                "bfloat16": torch.bfloat16,
+                "fp32": torch.float32,
+                "fp16": torch.float16,
+                "bf16": torch.bfloat16,
+            }
+            dtype = dtype_map.get(dtype.lower(), torch.float32)
+        self._dtype = dtype
+
+        # Load model with all interpretability parameters
         self.model = HookedTransformer.from_pretrained(
             model_id,
             device=device,
+            dtype=dtype,
+            fold_ln=fold_ln,
+            center_writing_weights=center_writing_weights,
+            center_unembed=center_unembed,
+            refactor_factored_attn_matrices=refactor_factored_attn_matrices,
             **kwargs
         )
         self.model.eval()
@@ -156,73 +189,91 @@ class TransformerLensProvider(BaseProvider):
         max_new_tokens: int,
         **kwargs
     ) -> ModelOutput:
-        """Generate for a single prompt."""
+        """
+        Generate for a single prompt.
 
+        This method uses an efficient single-pass approach:
+        1. Generate tokens using model.generate()
+        2. Run run_with_cache on the complete generated sequence
+        3. Extract activations from the cache
+
+        Note: If activations are not needed, we skip the cache pass entirely.
+        """
         # Tokenize input to get input length
         input_tokens = self.model.to_tokens(prompt)
         input_len = input_tokens.shape[1]
-
-        # Run model with cache to get all activations
-        # run_with_cache returns (logits, ActivationCache)
-        with torch.no_grad():
-            logits, cache = self.model.run_with_cache(
-                prompt,
-                return_type="logits"
-            )
 
         # Generate text - return tokens to get generated token IDs
         with torch.no_grad():
             generated_tokens = self.model.generate(
                 prompt,
                 max_new_tokens=max_new_tokens,
-                return_type="tokens",  # Important: return tokens, not string
+                return_type="tokens",
                 **kwargs
             )
 
         # Decode generated tokens to text
         generated_text = self.model.to_string(generated_tokens)
+        total_len = generated_tokens.shape[1] if generated_tokens.dim() > 1 else len(generated_tokens)
 
-        # Extract hidden states using shorthand tuple keys (more reliable than string keys)
-        # ActivationCache supports: cache[("resid_post", layer_idx)]
+        # Initialize outputs
+        logits_out: Optional[torch.Tensor] = None
         hidden_states: Dict[int, torch.Tensor] = {}
-        if return_hidden_states:
-            all_layers = hidden_state_layers or list(range(self._n_layers))
-            for layer_idx in all_layers:
-                try:
-                    # Use shorthand tuple access - handles negative indexing too
-                    resid = cache[("resid_post", layer_idx)]
-                    hidden_states[layer_idx] = resid.squeeze(0)
-                except KeyError:
-                    # Layer might not exist for this model
-                    pass
-
-        # Extract attention weights using shorthand tuple keys
-        # cache[("pattern", layer_idx)] for attention patterns
         attention_weights: Dict[int, torch.Tensor] = {}
-        if return_attention_weights:
-            for layer_idx in range(self._n_layers):
-                try:
-                    # Use shorthand tuple access
-                    pattern = cache[("pattern", layer_idx)]
-                    attention_weights[layer_idx] = pattern.squeeze(0)
-                except KeyError:
-                    # Layer might not exist or model is attn_only
-                    pass
+
+        # Only run cache pass if we need activations or logits
+        need_cache_pass = return_logits or return_hidden_states or return_attention_weights
+
+        if need_cache_pass:
+            # Run model with cache on the COMPLETE generated sequence
+            # This ensures logits and activations cover the full sequence
+            with torch.no_grad():
+                logits, cache = self.model.run_with_cache(
+                    generated_tokens,
+                    return_type="logits"
+                )
+
+            # Extract logits (shape: [seq_len, vocab_size])
+            if return_logits:
+                logits_out = logits.squeeze(0)
+
+            # Extract hidden states using shorthand tuple keys
+            if return_hidden_states:
+                all_layers = hidden_state_layers or list(range(self._n_layers))
+                for layer_idx in all_layers:
+                    try:
+                        resid = cache[("resid_post", layer_idx)]
+                        hidden_states[layer_idx] = resid.squeeze(0)
+                    except KeyError:
+                        pass
+
+            # Extract attention weights using shorthand tuple keys
+            if return_attention_weights:
+                for layer_idx in range(self._n_layers):
+                    try:
+                        pattern = cache[("pattern", layer_idx)]
+                        attention_weights[layer_idx] = pattern.squeeze(0)
+                    except KeyError:
+                        pass
 
         # Build output
         output = ModelOutput(
             model_id=self.model_id,
             prompt=prompt,
             generated_text=generated_text,
-            logits=logits.squeeze(0) if return_logits else None,
-            logprobs=torch.log_softmax(logits.squeeze(0), dim=-1) if return_logits else None,
+            logits=logits_out,
+            logprobs=torch.log_softmax(logits_out, dim=-1) if logits_out is not None else None,
             hidden_states=hidden_states,
             attention_weights=attention_weights,
             tokens=generated_tokens.squeeze(0).tolist() if generated_tokens.dim() > 1 else generated_tokens.tolist(),
             token_strings=self.model.to_str_tokens(generated_tokens.squeeze(0)),
             metadata={
                 "input_length": input_len,
-                "total_length": generated_tokens.shape[1] if generated_tokens.dim() > 1 else len(generated_tokens),
+                "total_length": total_len,
+                "generated_length": total_len - input_len,
+                "dtype": str(self._dtype),
+                "fold_ln": self._fold_ln,
+                "center_unembed": self._center_unembed,
             }
         )
 
