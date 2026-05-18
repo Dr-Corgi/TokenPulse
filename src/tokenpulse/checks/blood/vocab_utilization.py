@@ -24,29 +24,38 @@ def _load_default_dataset(lang: str = "en", max_samples: int = 100) -> List[str]
     Load default dataset from project data directory.
 
     Args:
-        lang: Language code ("en" or "zh")
-        max_samples: Maximum number of samples to load
+        lang: Language code ("en", "zh", or "all" for both)
+        max_samples: Maximum number of samples to load per language
 
     Returns:
         List of text samples
     """
     # Try to find data directory relative to this module
-    module_dir = Path(__file__).parent
-    project_root = module_dir.parent.parent.parent  # src/tokenpulse/checks/blood -> project root
+    # Path: src/tokenpulse/checks/blood/vocab_utilization.py -> project_root/data
+    module_dir = Path(__file__).resolve().parent
+    project_root = module_dir.parent.parent.parent.parent  # go up to project root
     data_dir = project_root / "data"
 
-    jsonl_file = data_dir / f"paracrawl_{lang}_1000.jsonl"
-
-    if not jsonl_file.exists():
-        return []
+    # Determine which languages to load
+    if lang == "all":
+        langs = ["en", "zh"]
+    else:
+        langs = [lang]
 
     texts = []
-    with open(jsonl_file, 'r', encoding='utf-8') as f:
-        for i, line in enumerate(f):
-            if i >= max_samples:
-                break
-            record = json.loads(line)
-            texts.append(record['text'])
+    for l in langs:
+        jsonl_file = data_dir / f"paracrawl_{l}_1000.jsonl"
+        if not jsonl_file.exists():
+            continue
+
+        with open(jsonl_file, 'r', encoding='utf-8') as f:
+            count = 0
+            for line in f:
+                if count >= max_samples:
+                    break
+                record = json.loads(line)
+                texts.append(record['text'])
+                count += 1
 
     return texts
 
@@ -403,7 +412,7 @@ class VocabularyUtilizationCheck(BaseCheck):
 
         return score
 
-    def _get_default_prompts(self, lang: str = "en") -> List[str]:
+    def _get_default_prompts(self, lang: str = "all") -> List[str]:
         """
         Get default prompts for vocabulary analysis.
 
@@ -411,17 +420,23 @@ class VocabularyUtilizationCheck(BaseCheck):
         Falls back to hardcoded prompts if data files not found.
 
         Args:
-            lang: Language code ("en" or "zh")
+            lang: Language code ("en", "zh", or "all" for both languages)
 
         Returns:
             List of text samples
         """
         # Try loading from project data
-        texts = _load_default_dataset(lang, max_samples=self.config.sample_size)
+        # For "all", load half the samples from each language
+        if lang == "all":
+            max_per_lang = max(1, self.config.sample_size // 2)
+            texts = _load_default_dataset("all", max_samples=max_per_lang)
+        else:
+            texts = _load_default_dataset(lang, max_samples=self.config.sample_size)
+
         if texts:
             return texts
 
-        # Fallback to hardcoded prompts
+        # Fallback to hardcoded prompts (English only)
         return [
             "The quick brown fox jumps over the lazy dog.",
             "Machine learning is a subset of artificial intelligence.",
